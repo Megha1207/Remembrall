@@ -21,41 +21,22 @@ async def startup_event():
 
 # --- MCP Endpoint for Puch AI ---
 @app.post("/mcp")
-async def mcp_handler(request: Request):
-    """
-    MCP endpoint for Puch AI connection.
-    Expects JSON body like:
-    {
-      "method": "validate",
-      "params": {
-        "authorization": "Bearer abc123token"
-      }
-    }
-    """
-    try:
-        data = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON")
+async def mcp_handler(request: Request, authorization: str = Header(None)):
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
+    token = authorization.split(" ")[1]
+
+    data = await request.json()
     method = data.get("method")
-    params = data.get("params", {})
+
+    if token != VALID_BEARER_TOKEN:
+        raise HTTPException(status_code=403, detail="Invalid token")
 
     if method == "validate":
-        authorization = params.get("authorization", "")
-        if not authorization.startswith("Bearer "):
-            raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+        return PlainTextResponse(USER_PHONE_NUMBER)
 
-        token = authorization.split(" ")[1]
-        if token == VALID_BEARER_TOKEN:
-            # Return phone number as plain text (required by Puch AI)
-            return PlainTextResponse(USER_PHONE_NUMBER)
-        else:
-            raise HTTPException(status_code=403, detail="Invalid token")
-
-    # Implement other MCP methods if needed
-
-    return JSONResponse({"detail": f"Unknown method '{method}'"}, status_code=400)
-
+    raise HTTPException(status_code=400, detail=f"Unknown method '{method}'")
 # --- Your existing /validate endpoint (can keep or remove if you prefer) ---
 @app.get("/validate")
 async def validate(authorization: str = Header(None)):
