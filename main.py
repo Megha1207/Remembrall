@@ -14,6 +14,7 @@ VALID_BEARER_TOKEN = os.getenv("BEARER_TOKEN")  # Set this in your .env
 USER_PHONE_NUMBER = os.getenv("USER_PHONE_NUMBER")  # Set your user phone number here
 
 app = FastAPI()
+
 @app.on_event("startup")
 async def startup_event():
     reminders.start_reminder_thread()
@@ -23,31 +24,37 @@ async def startup_event():
 async def mcp_handler(request: Request):
     """
     MCP endpoint for Puch AI connection.
-    Expects JSON body with keys:
-    - command: e.g. "validate"
-    - token: bearer token string
+    Expects JSON body like:
+    {
+      "method": "validate",
+      "params": {
+        "authorization": "Bearer abc123token"
+      }
+    }
     """
     try:
         data = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    command = data.get("command")
-    token = data.get("token")
+    method = data.get("method")
+    params = data.get("params", {})
 
-    if not command or not token:
-        raise HTTPException(status_code=400, detail="Missing command or token")
+    if method == "validate":
+        authorization = params.get("authorization", "")
+        if not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
-    if command == "validate":
+        token = authorization.split(" ")[1]
         if token == VALID_BEARER_TOKEN:
             # Return phone number as plain text (required by Puch AI)
             return PlainTextResponse(USER_PHONE_NUMBER)
         else:
             raise HTTPException(status_code=403, detail="Invalid token")
 
-    # You can handle other MCP commands here if needed
-    return JSONResponse({"detail": f"Unknown command '{command}'"}, status_code=400)
+    # Implement other MCP methods if needed
 
+    return JSONResponse({"detail": f"Unknown method '{method}'"}, status_code=400)
 
 # --- Your existing /validate endpoint (can keep or remove if you prefer) ---
 @app.get("/validate")
