@@ -90,7 +90,33 @@ async def mcp_get():
             "example_payload": {"method": "validate"}
         }
     }
-
+@app.get("/mcp-env-test")
+@app.post("/mcp-env-test")
+async def mcp_env_test():
+    return {
+        "status": "working",
+        "env_vars": {
+            "user_phone_set": bool(USER_PHONE_NUMBER),
+            "bearer_token_set": bool(BEARER_TOKEN),
+            "user_phone_value": USER_PHONE_NUMBER if USER_PHONE_NUMBER else "NOT_SET",
+            "bearer_token_first_3": BEARER_TOKEN[:3] + "..." if BEARER_TOKEN else "NOT_SET"
+        },
+        "server_info": {
+            "python_version": "3.x",
+            "fastapi_running": True
+        }
+    }
+    return {
+        "message": "MCP endpoint for Puch AI integration",
+        "methods": {
+            "GET": "Returns this information",
+            "POST": "Handles MCP commands (requires Authorization header)"
+        },
+        "usage": {
+            "auth_header": "Authorization: Bearer <token>",
+            "example_payload": {"method": "validate"}
+        }
+    }
 @app.post("/mcp")
 async def mcp_handler(request: Request, authorization: str = Header(None)):
     try:
