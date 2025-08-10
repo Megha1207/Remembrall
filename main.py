@@ -94,20 +94,31 @@ async def mcp_get():
 @app.post("/mcp")
 async def mcp_handler(request: Request, authorization: str = Header(None)):
     try:
-        # Get request data
         data = await request.json()
         method = data.get("method")
-        
+        request_id = data.get("id", None)
+
         logger.info(f"MCP request received - Method: {method}")
 
-        # Handle validate method without token check
+        # MCP 'initialize'
+        if method == "initialize":
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {"serverInfo": {"name": "Notion WhatsApp MCP", "version": "1.0.0"}}
+            }
+
+        # MCP 'validate' - no token required
         if method == "validate":
             if not USER_PHONE_NUMBER:
                 raise HTTPException(status_code=500, detail="USER_PHONE_NUMBER not configured")
-            logger.info(f"Validation request - returning phone number: {USER_PHONE_NUMBER}")
-            return PlainTextResponse(USER_PHONE_NUMBER)
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {"phone_number": USER_PHONE_NUMBER}
+            }
 
-        # For other methods, check authorization
+        # Token required for everything else
         if not authorization or not authorization.startswith("Bearer "):
             raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
@@ -115,19 +126,57 @@ async def mcp_handler(request: Request, authorization: str = Header(None)):
         if token != BEARER_TOKEN:
             raise HTTPException(status_code=403, detail="Invalid token")
 
-        # Handle other MCP methods here
-        if method == "status":
-            return {"status": "active", "service": "notion-whatsapp-bot"}
-        
-        # Add more MCP methods as needed
-        logger.warning(f"Unknown MCP method: {method}")
-        raise HTTPException(status_code=400, detail=f"Unknown method '{method}'")
+        # MCP 'tools/list'
+        if method == "tools/list":
+            tools = [
+                {
+                    "name": "summary",
+                    "description": "Get a summary of tasks from Notion",
+                    "parameters": {"type": "object", "properties": {}}
+                },
+                {
+                    "name": "list_tasks",
+                    "description": "List all tasks from Notion",
+                    "parameters": {"type": "object", "properties": {}}
+                }
+            ]
+            return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": tools}}
+
+        # MCP 'tool/summary'
+        if method == "tool/summary":
+            tasks = notion.list_tasks(user_phone=USER_PHONE_NUMBER)
+            total = len(tasks)
+            completed = sum(t['done'] for t in tasks)
+            incomplete = total - completed
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "total": total,
+                    "completed": completed,
+                    "incomplete": incomplete
+                }
+            }
+
+        # MCP 'tool/list_tasks'
+        if method == "tool/list_tasks":
+            tasks = notion.list_tasks(user_phone=USER_PHONE_NUMBER)
+            return {"jsonrpc": "2.0", "id": request_id, "result": {"tasks": tasks}}
+
+        # Unknown MCP method
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "error": {"code": -32601, "message": f"Unknown method '{method}'"}
+        }
 
     except Exception as e:
-        logger.error(f"Error in MCP handler: {str(e)}")
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(status_code=500, detail="Internal server error")
+        logger.error(f"Error in MCP handler: {str(e)}", exc_info=True)
+        return {
+            "jsonrpc": "2.0",
+            "id": None,
+            "error": {"code": -32603, "message": "Internal server error"}
+        }
 
 # Validate endpoint (legacy support)
 @app.get("/validate")
