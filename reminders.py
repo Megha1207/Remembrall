@@ -4,7 +4,10 @@ from datetime import datetime, timedelta, timezone
 from twilio.rest import Client
 import notion
 from storage import get_phone_for_task
+from notion import edit_task, complete_task  # Import edit_task and complete_task functions
 import os
+from datetime import datetime, timedelta
+import pytz
 
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
@@ -76,3 +79,33 @@ def start_reminder_thread():
     thread = threading.Thread(target=check_and_send_reminders, daemon=True)
     thread.start()
     print("Reminder thread started.")
+def get_next_reminder_date(current_date_str: str, recurrence: str) -> str:
+    dt = datetime.fromisoformat(current_date_str.replace('Z', '+00:00'))
+    if recurrence == "Daily":
+        dt += timedelta(days=1)
+    elif recurrence == "Weekly":
+        dt += timedelta(weeks=1)
+    elif recurrence == "Monthly":
+        # Naive add 1 month — for production use a robust lib like dateutil.relativedelta
+        month = dt.month + 1 if dt.month < 12 else 1
+        year = dt.year + (1 if dt.month == 12 else 0)
+        dt = dt.replace(year=year, month=month)
+    return dt.isoformat()
+
+def process_due_tasks():
+    tasks = notion.list_tasks(filter_done=False)
+    now = datetime.now(pytz.timezone("Asia/Kolkata"))
+    for t in tasks:
+        if t.get("reminder"):
+            reminder_dt = datetime.fromisoformat(t["reminder"].replace("Z", "+00:00"))
+            if reminder_dt <= now:
+                # Notify user here (your notification logic)
+                
+                # If recurrence is set, create next reminder
+                if t.get("recurrence"):
+                    next_reminder = get_next_reminder_date(t["reminder"], t["recurrence"])
+                    # Update task with new reminder date:
+                    edit_task(t["name"], new_reminder=next_reminder, user_phone=t.get("user_phone"))
+                
+                # Mark this reminder done or handle as per your needs
+                complete_task(t["name"], user_phone=t.get("user_phone"))
