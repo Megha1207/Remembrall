@@ -9,12 +9,30 @@ import re
 import whatsapp  # Your command parsing module
 import notion    # Your Notion API wrapper module
 import reminders # Your background reminders starter
-
-app = FastAPI()
+VALID_BEARER_TOKEN = os.getenv("BEARER_TOKEN")  # Set this in your .env
+USER_PHONE_NUMBER = os.getenv("USER_PHONE_NUMBER")  # Set your user phone number here
 
 @app.on_event("startup")
 async def startup_event():
     reminders.start_reminder_thread()
+
+# --- Your existing routes here (whatsapp webhook etc.) ---
+
+@app.get("/validate")
+async def validate(authorization: str = Header(None)):
+    """
+    Validate bearer token and return user phone number in plain text.
+    This is used by Puch AI to authenticate your MCP server.
+    """
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+
+    token = authorization.split(" ")[1]
+    if token == VALID_BEARER_TOKEN:
+        # Return phone number as plain text (no JSON)
+        return PlainTextResponse(USER_PHONE_NUMBER)
+    else:
+        raise HTTPException(status_code=403, detail="Invalid token")
 
 def parse_add_args(args: str):
     # Split by / but allow spaces around /
