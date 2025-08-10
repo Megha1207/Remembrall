@@ -1,6 +1,20 @@
 import os
 from dotenv import load_dotenv
 load_dotenv()
+import uuid
+
+
+# Persistent Server ID logic
+SERVER_ID = os.getenv("MCP_SERVER_ID")
+
+if not SERVER_ID:
+    SERVER_ID = str(uuid.uuid4())
+    # Save it so it stays the same after restart
+    with open(".env", "a") as f:
+        f.write(f"\nMCP_SERVER_ID={SERVER_ID}")
+    print(f"[INIT] Generated new MCP Server ID: {SERVER_ID}")
+else:
+    print(f"[INIT] Loaded MCP Server ID from .env: {SERVER_ID}")
 
 from fastapi import FastAPI, Request, Header, HTTPException
 from fastapi.responses import PlainTextResponse, JSONResponse
@@ -81,6 +95,7 @@ async def health_check():
 async def mcp_get():
     return {
         "message": "MCP endpoint for Puch AI integration",
+        "server_id": SERVER_ID,  # Now returned
         "methods": {
             "GET": "Returns this information",
             "POST": "Handles MCP commands (requires Authorization header)"
@@ -90,6 +105,7 @@ async def mcp_get():
             "example_payload": {"method": "validate"}
         }
     }
+
 
 @app.post("/mcp")
 async def mcp_handler(request: Request, authorization: str = Header(None)):
@@ -467,4 +483,3 @@ async def method_not_allowed_handler(request: Request, exc):
             "path": str(request.url.path)
         }
     )
-
