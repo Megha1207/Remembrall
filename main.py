@@ -18,6 +18,9 @@ app = FastAPI()
 @app.on_event("startup")
 async def startup_event():
     reminders.start_reminder_thread()
+@app.get("/mcp")
+async def mcp_get():
+    return {"message": "MCP endpoint accepts POST requests only. Please POST your MCP commands here."}
 
 # --- MCP Endpoint for Puch AI ---
 @app.post("/mcp")
