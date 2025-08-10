@@ -6,9 +6,17 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import PlainTextResponse
 from twilio.twiml.messaging_response import MessagingResponse
 import re
+<<<<<<< Updated upstream
 import whatsapp
 import notion
 import reminders
+=======
+import whatsapp  # Your command parsing module
+import notion    # Your Notion API wrapper module
+import reminders # Your background reminders starter
+from pydantic import BaseModel
+from fastapi import HTTPException
+>>>>>>> Stashed changes
 
 app = FastAPI()
 
@@ -138,4 +146,13 @@ async def whatsapp_webhook(request: Request):
 
 @app.get("/whatsapp/webhook")
 async def whatsapp_webhook_get():
+<<<<<<< Updated upstream
     return PlainTextResponse("Please use POST method for this endpoint.", status_code=405)
+=======
+    return PlainTextResponse("Please use POST method for this endpoint.", status_code=405)
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
+>>>>>>> Stashed changes
