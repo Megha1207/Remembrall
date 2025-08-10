@@ -23,23 +23,28 @@ async def mcp_get():
     return {"message": "MCP endpoint accepts POST requests only. Please POST your MCP commands here."}
 
 # --- MCP Endpoint for Puch AI ---
+# --- MCP Endpoint for Puch AI ---
 @app.post("/mcp")
 async def mcp_handler(request: Request, authorization: str = Header(None)):
-    if authorization is None or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
-
-    token = authorization.split(" ")[1]
-
     data = await request.json()
     method = data.get("method")
 
-    if token != BEARER_TOKEN:
-        raise HTTPException(status_code=403, detail="Invalid token")
+    # Allow 'validate' without token check
+    if method != "validate":
+        if authorization != f"Bearer {BEARER_TOKEN}":
+           raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+
+
+        token = authorization.split(" ")[1]
+        if token != BEARER_TOKEN:
+            raise HTTPException(status_code=403, detail="Invalid token")
 
     if method == "validate":
+        # Return in {country_code}{number} format — e.g., "+919876543210"
         return PlainTextResponse(USER_PHONE_NUMBER)
 
     raise HTTPException(status_code=400, detail=f"Unknown method '{method}'")
+
 # --- Your existing /validate endpoint (can keep or remove if you prefer) ---
 @app.get("/validate")
 async def validate(authorization: str = Header(None)):
