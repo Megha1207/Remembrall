@@ -108,14 +108,15 @@ async def mcp_handler(request: Request, authorization: str = Header(None)):
                 "result": {"serverInfo": {"name": "Notion WhatsApp MCP", "version": "1.0.0"}}
             }
 
-        # MCP 'validate' - no token required
+        # MCP 'validate' - no token required, now safe
         if method == "validate":
-            if not USER_PHONE_NUMBER:
-                raise HTTPException(status_code=500, detail="USER_PHONE_NUMBER not configured")
             return {
                 "jsonrpc": "2.0",
                 "id": request_id,
-                "result": {"phone_number": USER_PHONE_NUMBER}
+                "result": {
+                    "status": "ok",
+                    "phone_number": USER_PHONE_NUMBER or None
+                }
             }
 
         # Token required for everything else
@@ -178,17 +179,8 @@ async def mcp_handler(request: Request, authorization: str = Header(None)):
             "error": {"code": -32603, "message": "Internal server error"}
         }
 
-# Validate endpoint (legacy support)
-@app.get("/validate")
-async def validate(authorization: str = Header(None)):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
-    token = authorization.split(" ")[1]
-    if token == BEARER_TOKEN:
-        return PlainTextResponse(USER_PHONE_NUMBER)
-    else:
-        raise HTTPException(status_code=403, detail="Invalid token")
+
 
 # Helper functions for parsing commands
 def parse_add_args(args: str):
