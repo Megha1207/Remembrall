@@ -1,26 +1,50 @@
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, Request
+from pydantic import BaseModel
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import PlainTextResponse
 from twilio.twiml.messaging_response import MessagingResponse
 import re
-import whatsapp  # your module for command parsing
-import notion    # your module for Notion task handling
-import reminders # your reminders background thread starter
+import whatsapp
+import notion
+import reminders
 
 app = FastAPI()
+
+class ValidateRequest(BaseModel):
+    bearer_token: str
+
+class ValidateResponse(BaseModel):
+    phone_number: str
+
+def validate_token(token: str) -> ValidateResponse:
+    # Replace with your real token verification logic if needed
+    if token != "abc123token":
+        raise HTTPException(status_code=401, detail="Invalid token")
+    # Return phone number in {country_code}{number} format as required
+    return ValidateResponse(phone_number="919818517347")
+
+@app.post("/validate", response_model=ValidateResponse)
+def validate(req: ValidateRequest):
+    return validate_token(req.bearer_token)
+
+@app.api_route("/mcp", methods=["GET", "POST"], response_model=ValidateResponse)
+async def mcp_validate(request: Request):
+    if request.method == "GET":
+        # Respond with dummy phone number for handshake/health check
+        return ValidateResponse(phone_number="98")
+
+    # POST: Validate bearer token from JSON body
+    data = await request.json()
+    token = data.get("bearer_token")
+    return validate_token(token)
 
 @app.on_event("startup")
 async def startup_event():
     reminders.start_reminder_thread()
 
 def parse_task_and_reminder(text: str):
-    """
-    Parses input like:
-      "Buy groceries /reminder 2025-08-10T15:00:00"
-    Returns (task_text, reminder_datetime_or_None)
-    """
     pattern = r"^(.*?)\s*/reminder\s*([\dT:\-\+]+)?$"
     match = re.match(pattern, text, re.IGNORECASE)
     if match:
@@ -34,7 +58,6 @@ def parse_task_and_reminder(text: str):
 async def root():
     return {"message": "Notion WhatsApp Bot is running."}
 
-# Accept only POST on webhook to avoid 405 Method Not Allowed
 @app.api_route("/whatsapp/webhook", methods=["POST"], response_class=PlainTextResponse)
 async def whatsapp_webhook(request: Request):
     try:
@@ -113,7 +136,6 @@ async def whatsapp_webhook(request: Request):
         twilio_resp.message("Sorry, something went wrong. Please try again.")
         return PlainTextResponse(content=str(twilio_resp), media_type="application/xml")
 
-# Optional GET route to help debug if method issues persist
 @app.get("/whatsapp/webhook")
 async def whatsapp_webhook_get():
     return PlainTextResponse("Please use POST method for this endpoint.", status_code=405)
