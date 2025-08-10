@@ -2,6 +2,7 @@ import os
 import re
 import requests
 from storage import set_phone_for_task  # your local phone storage helper
+from typing import Optional
 
 NOTION_API_URL = "https://api.notion.com/v1/pages"
 NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
@@ -169,7 +170,7 @@ def list_incomplete_tasks(user_phone: str = None) -> list:
     return list_tasks(user_phone, filter_done=False)
 
 
-def _find_task_page_id(task_name: str, user_phone: str = None) -> str | None:
+def _find_task_page_id(task_name: str, user_phone: Optional[str] = None) -> Optional[str]:
     if not NOTION_DATABASE_ID or not NOTION_API_KEY:
         print("Error: Missing Notion DB ID or API Key")
         return None

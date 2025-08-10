@@ -1,4 +1,5 @@
 import pickle
+from typing import Optional
 from pathlib import Path
 
 STORAGE_FILE = Path("storage.pkl")
@@ -17,7 +18,7 @@ def load_data():
         print(f"Warning: Could not load data from {STORAGE_FILE}: {e}")
         return {}
 
-def get_phone_for_task(task_name: str) -> str | None:
+def get_phone_for_task(task_name: str) -> Optional[str]:
     data = load_data()
     return data.get(task_name)
 
