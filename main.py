@@ -94,6 +94,10 @@ async def mcp_get():
 @app.post("/mcp")
 async def mcp_handler(request: Request, authorization: str = Header(None)):
     try:
+        logger.info(f"Headers: {dict(request.headers)}")
+        raw_body = await request.body()
+        logger.info(f"Body: {raw_body.decode('utf-8')}")
+
         data = await request.json()
         method = data.get("method")
         request_id = data.get("id", None)
@@ -178,6 +182,7 @@ async def mcp_handler(request: Request, authorization: str = Header(None)):
             "id": None,
             "error": {"code": -32603, "message": "Internal server error"}
         }
+
 
 
 
