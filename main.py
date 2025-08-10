@@ -94,40 +94,67 @@ async def mcp_get():
 @app.post("/mcp")
 async def mcp_handler(request: Request, authorization: str = Header(None)):
     try:
-        # Get request data
-        data = await request.json()
-        method = data.get("method")
+        # Debug logging
+        logger.info("=== MCP REQUEST START ===")
+        logger.info(f"Headers: {dict(request.headers)}")
+        logger.info(f"Authorization header: {authorization}")
         
-        logger.info(f"MCP request received - Method: {method}")
+        # Get request data with better error handling
+        try:
+            data = await request.json()
+            logger.info(f"Request JSON: {data}")
+        except Exception as json_error:
+            logger.error(f"JSON parsing error: {json_error}")
+            raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(json_error)}")
+        
+        method = data.get("method")
+        logger.info(f"MCP method: {method}")
+        
+        # Debug environment variables
+        logger.info(f"USER_PHONE_NUMBER configured: {bool(USER_PHONE_NUMBER)}")
+        logger.info(f"USER_PHONE_NUMBER value: {USER_PHONE_NUMBER}")
+        logger.info(f"BEARER_TOKEN configured: {bool(BEARER_TOKEN)}")
 
         # Handle validate method without token check
         if method == "validate":
             if not USER_PHONE_NUMBER:
+                logger.error("USER_PHONE_NUMBER not configured in environment")
                 raise HTTPException(status_code=500, detail="USER_PHONE_NUMBER not configured")
-            logger.info(f"Validation request - returning phone number: {USER_PHONE_NUMBER}")
+            
+            logger.info(f"Validation successful - returning phone number: {USER_PHONE_NUMBER}")
             return PlainTextResponse(USER_PHONE_NUMBER)
 
         # For other methods, check authorization
         if not authorization or not authorization.startswith("Bearer "):
+            logger.warning("Missing or invalid Authorization header")
             raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
         token = authorization.split(" ")[1]
         if token != BEARER_TOKEN:
+            logger.warning("Invalid bearer token provided")
             raise HTTPException(status_code=403, detail="Invalid token")
 
         # Handle other MCP methods here
         if method == "status":
+            logger.info("Status method called")
             return {"status": "active", "service": "notion-whatsapp-bot"}
         
         # Add more MCP methods as needed
         logger.warning(f"Unknown MCP method: {method}")
         raise HTTPException(status_code=400, detail=f"Unknown method '{method}'")
 
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
     except Exception as e:
-        logger.error(f"Error in MCP handler: {str(e)}")
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(status_code=500, detail="Internal server error")
+        logger.error(f"Unexpected error in MCP handler: {str(e)}", exc_info=True)
+        logger.error(f"Error type: {type(e)}")
+        
+        # Return more specific error information in development
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Internal server error: {str(e)}"
+        )
 
 # Validate endpoint (legacy support)
 @app.get("/validate")
