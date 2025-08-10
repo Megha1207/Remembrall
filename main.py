@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Header, HTTPException
 from fastapi.responses import PlainTextResponse
 from twilio.twiml.messaging_response import MessagingResponse
 import re
@@ -11,6 +11,8 @@ import notion    # Your Notion API wrapper module
 import reminders # Your background reminders starter
 VALID_BEARER_TOKEN = os.getenv("BEARER_TOKEN")  # Set this in your .env
 USER_PHONE_NUMBER = os.getenv("USER_PHONE_NUMBER")  # Set your user phone number here
+
+app = FastAPI()
 
 @app.on_event("startup")
 async def startup_event():
