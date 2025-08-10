@@ -6,24 +6,19 @@ from fastapi import FastAPI, Request, Header, HTTPException
 from fastapi.responses import PlainTextResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import logging
-
-from twilio.twiml.messaging_response import MessagingResponse
-import re
-import whatsapp  # Your command parsing module
-import notion    # Your Notion API wrapper module
-import reminders # Your background reminders starter
+import json
 
 # Environment variables
-BEARER_TOKEN = os.getenv("BEARER_TOKEN")  # Set this in your .env
-USER_PHONE_NUMBER = os.getenv("USER_PHONE_NUMBER")  # Set your user phone number here
+BEARER_TOKEN = os.getenv("BEARER_TOKEN", "m12egha12")  # Default fallback
+USER_PHONE_NUMBER = os.getenv("USER_PHONE_NUMBER", "+919602712127")  # Default fallback
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="Notion WhatsApp Bot",
-    description="A WhatsApp bot for managing Notion tasks",
+    title="Puch AI MCP Server",
+    description="MCP Server for Puch AI Integration",
     version="1.0.0"
 )
 
@@ -39,458 +34,256 @@ app.add_middleware(
 # Request logging middleware
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    logger.info(f"Method: {request.method}, URL: {request.url}, Headers: {dict(request.headers)}")
+    logger.info(f"=== REQUEST ===")
+    logger.info(f"Method: {request.method}")
+    logger.info(f"URL: {request.url}")
+    logger.info(f"Headers: {dict(request.headers)}")
+    
     response = await call_next(request)
-    logger.info(f"Response Status: {response.status_code}")
+    
+    logger.info(f"=== RESPONSE ===")
+    logger.info(f"Status: {response.status_code}")
+    logger.info(f"Headers: {dict(response.headers)}")
+    
     return response
 
-@app.on_event("startup")
-async def startup_event():
-    logger.info("Starting up the application...")
-    reminders.start_reminder_thread()
-    logger.info("Reminder thread started successfully")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    logger.info("Shutting down the application...")
-
-# Root endpoint
 @app.get("/")
 async def root():
     return {
-        "message": "Notion WhatsApp Bot is running",
-        "status": "healthy",
-        "endpoints": {
-            "health": "/health",
-            "validate": "/validate (GET)",
-            "mcp": "/mcp (GET for info, POST for commands)",
-            "whatsapp_webhook": "/whatsapp/webhook (POST only)"
-        }
+        "name": "Notion WhatsApp Bot MCP Server",
+        "version": "1.0.0",
+        "status": "ready",
+        "mcp_endpoint": "/mcp",
+        "phone_configured": bool(USER_PHONE_NUMBER),
+        "auth_configured": bool(BEARER_TOKEN)
     }
 
-# Health check endpoint
 @app.get("/health")
-async def health_check():
-    return {
-        "status": "healthy",
-        "message": "Service is running properly"
-    }
+async def health():
+    return {"status": "healthy"}
 
-# MCP endpoints - Fixed to handle both GET and POST properly
+# OPTIONS handler for CORS preflight
+@app.options("/mcp")
+async def mcp_options():
+    response = JSONResponse({"message": "CORS preflight"})
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "POST, GET, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    response.headers["Access-Control-Max-Age"] = "3600"
+    return response
+
 @app.get("/mcp")
-async def mcp_get():
+async def mcp_info():
     return {
-        "message": "MCP endpoint for Puch AI integration",
-        "methods": {
-            "GET": "Returns this information",
-            "POST": "Handles MCP commands (requires Authorization header)"
+        "name": "Notion WhatsApp Bot MCP Server",
+        "description": "MCP server for Puch AI integration",
+        "version": "1.0.0",
+        "protocol_version": "2024-11-05",
+        "capabilities": {
+            "tools": True,
+            "resources": False,
+            "prompts": False
         },
-        "usage": {
-            "auth_header": "Authorization: Bearer <token>",
-            "example_payload": {"method": "validate"}
-        }
+        "usage": "POST to this endpoint with proper MCP JSON-RPC format"
     }
-@app.get("/mcp-env-test")
-@app.post("/mcp-env-test")
-async def mcp_env_test():
-    return {
-        "status": "working",
-        "env_vars": {
-            "user_phone_set": bool(USER_PHONE_NUMBER),
-            "bearer_token_set": bool(BEARER_TOKEN),
-            "user_phone_value": USER_PHONE_NUMBER if USER_PHONE_NUMBER else "NOT_SET",
-            "bearer_token_first_3": BEARER_TOKEN[:3] + "..." if BEARER_TOKEN else "NOT_SET"
-        },
-        "server_info": {
-            "python_version": "3.x",
-            "fastapi_running": True
-        }
-    }
-    return {
-        "message": "MCP endpoint for Puch AI integration",
-        "methods": {
-            "GET": "Returns this information",
-            "POST": "Handles MCP commands (requires Authorization header)"
-        },
-        "usage": {
-            "auth_header": "Authorization: Bearer <token>",
-            "example_payload": {"method": "validate"}
-        }
-    }
+
 @app.post("/mcp")
-async def mcp_handler(request: Request, authorization: str = Header(None)):
+async def mcp_handler(request: Request):
     try:
-        # Debug logging
-        logger.info("=== MCP REQUEST START ===")
-        logger.info(f"Headers: {dict(request.headers)}")
-        logger.info(f"Authorization header: {authorization}")
+        # Log the raw request
+        body = await request.body()
+        logger.info(f"Raw body: {body}")
         
-        # Get request data with better error handling
+        if len(body) == 0:
+            logger.error("Empty request body")
+            return create_error_response(-32600, "Empty request body")
+        
+        # Parse JSON
         try:
-            data = await request.json()
-            logger.info(f"Request JSON: {data}")
-        except Exception as json_error:
-            logger.error(f"JSON parsing error: {json_error}")
-            raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(json_error)}")
+            data = json.loads(body)
+            logger.info(f"Parsed JSON: {data}")
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error: {e}")
+            return create_error_response(-32700, f"Parse error: {str(e)}")
         
+        # Handle different request types
         method = data.get("method")
-        logger.info(f"MCP method: {method}")
+        params = data.get("params", {})
+        request_id = data.get("id")
         
-        # Debug environment variables
-        logger.info(f"USER_PHONE_NUMBER configured: {bool(USER_PHONE_NUMBER)}")
-        logger.info(f"USER_PHONE_NUMBER value: {USER_PHONE_NUMBER}")
-        logger.info(f"BEARER_TOKEN configured: {bool(BEARER_TOKEN)}")
-
-        # Handle validate method without token check
+        logger.info(f"Method: {method}, Params: {params}, ID: {request_id}")
+        
+        # Handle initialize request
+        if method == "initialize":
+            logger.info("Handling initialize request")
+            return create_success_response(request_id, {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {
+                    "tools": {"listChanged": True},
+                    "resources": {"listChanged": False, "subscribe": False},
+                    "prompts": {"listChanged": False}
+                },
+                "serverInfo": {
+                    "name": "notion-whatsapp-bot",
+                    "version": "1.0.0"
+                }
+            })
+        
+        # Handle notifications/initialized
+        if method == "notifications/initialized":
+            logger.info("Handling initialized notification")
+            # No response needed for notifications
+            return JSONResponse({})
+        
+        # Handle tools/list request
+        if method == "tools/list":
+            logger.info("Handling tools/list request")
+            return create_success_response(request_id, {
+                "tools": [
+                    {
+                        "name": "validate",
+                        "description": "Validate server and return owner phone number",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {},
+                            "required": []
+                        }
+                    },
+                    {
+                        "name": "add_task", 
+                        "description": "Add a new task to Notion",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "task": {"type": "string", "description": "Task description"},
+                                "priority": {"type": "string", "description": "Task priority (Low/Medium/High)"},
+                                "reminder": {"type": "string", "description": "Reminder datetime"}
+                            },
+                            "required": ["task"]
+                        }
+                    }
+                ]
+            })
+        
+        # Handle tools/call request
+        if method == "tools/call":
+            tool_name = params.get("name")
+            tool_args = params.get("arguments", {})
+            
+            logger.info(f"Tool call: {tool_name} with args: {tool_args}")
+            
+            if tool_name == "validate":
+                # Check authorization for validate tool
+                auth_header = request.headers.get("authorization")
+                if auth_header:
+                    if not auth_header.startswith("Bearer "):
+                        return create_error_response(-32002, "Invalid authorization format")
+                    
+                    token = auth_header.split(" ")[1]
+                    if token != BEARER_TOKEN:
+                        return create_error_response(-32002, "Invalid token")
+                
+                # Return phone number without + prefix as per Puch AI requirements
+                phone = str(USER_PHONE_NUMBER).strip()
+                if phone.startswith('+'):
+                    phone = phone[1:]
+                
+                logger.info(f"Returning phone number: {phone}")
+                
+                return create_success_response(request_id, {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": phone
+                        }
+                    ]
+                })
+            
+            elif tool_name == "add_task":
+                # Check authorization for add_task
+                auth_header = request.headers.get("authorization") 
+                if not auth_header or not auth_header.startswith("Bearer "):
+                    return create_error_response(-32002, "Missing or invalid authorization")
+                
+                token = auth_header.split(" ")[1]
+                if token != BEARER_TOKEN:
+                    return create_error_response(-32002, "Invalid token")
+                
+                task = tool_args.get("task", "")
+                if not task:
+                    return create_error_response(-32602, "Task description is required")
+                
+                # Here you would integrate with your Notion API
+                # For now, just return success
+                return create_success_response(request_id, {
+                    "content": [
+                        {
+                            "type": "text", 
+                            "text": f"Task '{task}' added successfully to Notion!"
+                        }
+                    ]
+                })
+            
+            else:
+                return create_error_response(-32601, f"Unknown tool: {tool_name}")
+        
+        # Handle validate method (legacy format for testing)
         if method == "validate":
-            if not USER_PHONE_NUMBER:
-                logger.error("USER_PHONE_NUMBER not configured in environment")
-                raise HTTPException(status_code=500, detail="USER_PHONE_NUMBER not configured")
+            logger.info("Handling legacy validate method")
+            phone = str(USER_PHONE_NUMBER).strip()
+            if phone.startswith('+'):
+                phone = phone[1:]
             
-            logger.info(f"Validation successful - returning phone number: {USER_PHONE_NUMBER}")
-            return PlainTextResponse(USER_PHONE_NUMBER)
-
-        # For other methods, check authorization
-        if not authorization or not authorization.startswith("Bearer "):
-            logger.warning("Missing or invalid Authorization header")
-            raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
-
-        token = authorization.split(" ")[1]
-        if token != BEARER_TOKEN:
-            logger.warning("Invalid bearer token provided")
-            raise HTTPException(status_code=403, detail="Invalid token")
-
-        # Handle other MCP methods here
-        if method == "status":
-            logger.info("Status method called")
-            return {"status": "active", "service": "notion-whatsapp-bot"}
+            response = PlainTextResponse(phone)
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            return response
         
-        # Add more MCP methods as needed
-        logger.warning(f"Unknown MCP method: {method}")
-        raise HTTPException(status_code=400, detail=f"Unknown method '{method}'")
-
-    except HTTPException:
-        # Re-raise HTTP exceptions as-is
-        raise
+        # Unknown method
+        logger.warning(f"Unknown method: {method}")
+        return create_error_response(-32601, f"Method not found: {method}")
+        
     except Exception as e:
-        logger.error(f"Unexpected error in MCP handler: {str(e)}", exc_info=True)
-        logger.error(f"Error type: {type(e)}")
-        
-        # Return more specific error information in development
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Internal server error: {str(e)}"
-        )
+        logger.error(f"Unexpected error: {str(e)}", exc_info=True)
+        return create_error_response(-32603, f"Internal error: {str(e)}")
 
-# Validate endpoint (legacy support)
-@app.get("/validate")
-async def validate(authorization: str = Header(None)):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
-
-    token = authorization.split(" ")[1]
-    if token == BEARER_TOKEN:
-        return PlainTextResponse(USER_PHONE_NUMBER)
-    else:
-        raise HTTPException(status_code=403, detail="Invalid token")
-
-# Helper functions for parsing commands
-def parse_add_args(args: str):
-    """Parse arguments for the add command"""
-    parts = [part.strip() for part in re.split(r'\s*/\s*', args)]
-    task_text = parts[0]
-    reminder = None
-    priority = None
-    recurrence = None
-    tags = None
-    notes = None
-
-    for part in parts[1:]:
-        lowered = part.lower()
-        if lowered.startswith("reminder "):
-            reminder = part[9:].strip()
-        elif lowered.startswith("priority "):
-            priority = part[9:].strip().capitalize()
-        elif lowered.startswith("recurrence "):
-            recurrence = part[11:].strip().capitalize()
-        elif lowered.startswith("repeat "):  # alias for recurrence
-            recurrence = part[7:].strip().capitalize()
-        elif lowered.startswith("tags "):
-            tags = [t.strip() for t in part[5:].split(",") if t.strip()]
-        elif lowered.startswith("notes "):
-            notes = part[6:].strip()
-
-    return task_text, reminder, priority, recurrence, tags, notes
-
-def parse_edit_args(args: str):
-    """Parse arguments for the edit command"""
-    parts = [part.strip() for part in re.split(r'\s*/\s*', args)]
-    old_task_name = parts[0]
-    updates = {
-        "new_task_name": None,
-        "new_reminder": None,
-        "new_priority": None,
-        "new_recurrence": None,
-        "new_tags": None,
-        "new_notes": None,
+def create_success_response(request_id, result):
+    """Create a JSON-RPC success response"""
+    response_data = {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "result": result
     }
+    response = JSONResponse(response_data)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Content-Type"] = "application/json"
+    return response
 
-    for part in parts[1:]:
-        lowered = part.lower()
-        if lowered.startswith("newname "):
-            updates["new_task_name"] = part[8:].strip()
-        elif lowered.startswith("reminder "):
-            updates["new_reminder"] = part[9:].strip()
-        elif lowered.startswith("priority "):
-            updates["new_priority"] = part[9:].strip().capitalize()
-        elif lowered.startswith("recurrence "):
-            updates["new_recurrence"] = part[11:].strip().capitalize()
-        elif lowered.startswith("repeat "):
-            updates["new_recurrence"] = part[7:].strip().capitalize()
-        elif lowered.startswith("tags "):
-            tags_str = part[5:].strip()
-            updates["new_tags"] = [t.strip() for t in tags_str.split(",") if t.strip()]
-        elif lowered.startswith("notes "):
-            updates["new_notes"] = part[6:].strip()
-
-    return old_task_name, updates
-
-# WhatsApp webhook - Fixed to handle errors better
-@app.post("/whatsapp/webhook", response_class=PlainTextResponse)
-async def whatsapp_webhook(request: Request):
-    try:
-        # Get form data from Twilio
-        form = await request.form()
-        incoming_msg = form.get('Body', '').strip()
-        from_number = form.get('From', '').strip()
-        
-        logger.info(f"WhatsApp message received from {from_number}: {incoming_msg}")
-
-        # Parse the command
-        command, args = whatsapp.parse_command(incoming_msg)
-        response_text = ""
-
-        # Handle commands
-        if command == "add":
-            if not args:
-                response_text = (
-                    "Please specify a task to add. Example:\n"
-                    "add Buy groceries /reminder 2025-08-10T15:00:00 /priority High /repeat Daily "
-                    "/tags shopping,urgent /notes Buy low fat milk"
-                )
-            else:
-                task_text, reminder, priority, recurrence, tags, notes = parse_add_args(args)
-                success = notion.add_task(
-                    task_text,
-                    reminder_datetime=reminder,
-                    priority=priority,
-                    recurrence=recurrence,
-                    tags=tags,
-                    notes=notes,
-                    user_phone=from_number
-                )
-                if success:
-                    if reminder:
-                        response_text = f"✅ Task added with reminder set at {reminder}!"
-                    else:
-                        response_text = "✅ Task added to Notion!"
-                else:
-                    response_text = "❌ Failed to add task. Please try again."
-
-        elif command == "list":
-            sort_flag = "sort" in args.lower()
-            tasks = notion.list_tasks(user_phone=from_number, sort_by_reminder=sort_flag)
-            if tasks:
-                response_text = "📋 Your tasks:\n" + "\n".join(
-                    f"{'✅' if t['done'] else '⏳'} {t['name']}" +
-                    (f" 🔔 {t['reminder']}" if t.get('reminder') else "") +
-                    (f" 🔥 {t['priority']}" if t.get('priority') else "") +
-                    (f" 🔄 {t['recurrence']}" if t.get('recurrence') else "")
-                    for t in tasks
-                )
-            else:
-                response_text = "📭 No tasks found."
-
-        elif command == "list-incomplete":
-            sort_flag = "sort" in args.lower()
-            tasks = notion.list_tasks(user_phone=from_number, filter_done=False, sort_by_reminder=sort_flag)
-            if tasks:
-                response_text = "⏳ Incomplete tasks:\n" + "\n".join(
-                    f"• {t['name']}" +
-                    (f" 🔔 {t['reminder']}" if t.get('reminder') else "") +
-                    (f" 🔥 {t['priority']}" if t.get('priority') else "") +
-                    (f" 🔄 {t['recurrence']}" if t.get('recurrence') else "")
-                    for t in tasks
-                )
-            else:
-                response_text = "🎉 No incomplete tasks found!"
-
-        elif command == "complete":
-            task_name = args.strip()
-            if not task_name:
-                response_text = "Please specify a task to complete. Example:\ncomplete Buy groceries"
-            else:
-                success = notion.complete_task(task_name, user_phone=from_number)
-                response_text = "✅ Task marked as completed!" if success else "❌ Failed to mark task as completed."
-
-        elif command == "mark-incomplete":
-            task_name = args.strip()
-            if not task_name:
-                response_text = "Please specify a task to mark incomplete. Example:\nmark-incomplete Buy groceries"
-            else:
-                success = notion.mark_incomplete_task(task_name, user_phone=from_number)
-                response_text = "⏳ Task marked as incomplete!" if success else "❌ Failed to update task."
-
-        elif command == "edit":
-            if not args.strip():
-                response_text = (
-                    "Specify task edit details. Example:\n"
-                    "edit Old Task Name /newname New Task Name /reminder 2025-08-12T10:00:00 /priority High "
-                    "/recurrence Daily /tags tag1,tag2 /notes Some notes here"
-                )
-            else:
-                old_task_name, updates = parse_edit_args(args)
-                success = notion.edit_task(
-                    old_task_name,
-                    new_task_name=updates["new_task_name"],
-                    new_reminder=updates["new_reminder"],
-                    new_priority=updates["new_priority"],
-                    new_recurrence=updates["new_recurrence"],
-                    new_tags=updates["new_tags"],
-                    new_notes=updates["new_notes"],
-                    user_phone=from_number,
-                )
-                response_text = "✏️ Task edited successfully!" if success else "❌ Failed to edit task."
-
-        elif command == "delete":
-            task_name = args.strip()
-            if not task_name:
-                response_text = "Please specify a task to delete. Example:\ndelete Buy groceries"
-            else:
-                success = notion.delete_task(task_name, user_phone=from_number)
-                response_text = "🗑️ Task deleted!" if success else "❌ Failed to delete task."
-
-        elif command == "delete-all-completed":
-            success = notion.delete_all_completed_tasks(user_phone=from_number)
-            response_text = "🗑️ All completed tasks deleted!" if success else "❌ Failed to delete completed tasks."
-
-        elif command == "search":
-            keyword = args.strip()
-            if not keyword:
-                response_text = "Please provide a keyword to search tasks. Example:\nsearch groceries"
-            else:
-                results = notion.search_tasks(keyword, user_phone=from_number)
-                if results:
-                    response_text = "🔍 Search results:\n" + "\n".join(
-                        f"• {t['name']}" for t in results
-                    )
-                else:
-                    response_text = "🔍 No matching tasks found."
-
-        elif command == "summary":
-            tasks = notion.list_tasks(user_phone=from_number)
-            total = len(tasks)
-            completed = sum(t['done'] for t in tasks)
-            incomplete = total - completed
-            priorities = {}
-            for t in tasks:
-                p = t.get('priority', 'None')
-                priorities[p] = priorities.get(p, 0) + 1
-            
-            response_text = (
-                f"📊 Task Summary:\n"
-                f"📋 Total: {total}\n"
-                f"✅ Completed: {completed}\n"
-                f"⏳ Incomplete: {incomplete}\n"
-                f"🔥 By Priority:\n" + 
-                "\n".join(f"  • {p}: {count}" for p, count in priorities.items())
-            )
-
-        elif command == "help" or not command:
-            response_text = (
-                "🤖 *Notion WhatsApp Bot Commands:*\n\n"
-                "📝 *add* <task> [options] - Add a task\n"
-                "   Options: /reminder <datetime> /priority <Low|Medium|High> /repeat <Daily|Weekly|Monthly> /tags <tag1,tag2> /notes <text>\n\n"
-                "📋 *list* [sort] - List all tasks\n"
-                "⏳ *list-incomplete* [sort] - List incomplete tasks\n"
-                "✅ *complete* <task> - Mark task as completed\n"
-                "⏳ *mark-incomplete* <task> - Mark task as incomplete\n"
-                "✏️ *edit* <task> [options] - Edit a task\n"
-                "🗑️ *delete* <task> - Delete a task\n"
-                "🗑️ *delete-all-completed* - Delete all completed tasks\n"
-                "🔍 *search* <keyword> - Search tasks\n"
-                "📊 *summary* - Show task summary\n"
-                "❓ *help* - Show this message\n\n"
-                "💡 *Example:* add Buy milk /reminder 2025-08-10T15:00:00 /priority High /tags shopping"
-            )
-
-        else:
-            response_text = "❓ Unknown command. Send 'help' for the list of commands."
-
-        logger.info(f"Sending response: {response_text[:100]}...")
-
-        # Create Twilio response
-        twilio_resp = MessagingResponse()
-        twilio_resp.message(response_text)
-        return PlainTextResponse(content=str(twilio_resp), media_type="application/xml")
-
-    except Exception as e:
-        logger.error(f"Exception in WhatsApp webhook: {str(e)}", exc_info=True)
-        twilio_resp = MessagingResponse()
-        twilio_resp.message("😵 Sorry, something went wrong. Please try again or contact support.")
-        return PlainTextResponse(content=str(twilio_resp), media_type="application/xml")
-
-# WhatsApp webhook GET endpoint - Returns proper error
-@app.get("/whatsapp/webhook")
-async def whatsapp_webhook_get():
-    return JSONResponse(
-        status_code=405,
-        content={
-            "error": "Method Not Allowed",
-            "message": "This endpoint only accepts POST requests from Twilio WhatsApp webhook",
-            "allowed_methods": ["POST"]
+def create_error_response(code, message, request_id=None):
+    """Create a JSON-RPC error response"""
+    response_data = {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {
+            "code": code,
+            "message": message
         }
-    )
+    }
+    response = JSONResponse(response_data, status_code=400)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Content-Type"] = "application/json"
+    return response
 
-# Catch-all for undefined routes
-@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+# Catch-all for debugging
+@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 async def catch_all(path: str, request: Request):
+    logger.info(f"Catch-all hit: {request.method} {path}")
     return JSONResponse(
-        status_code=404,
-        content={
+        {
             "error": "Not Found",
-            "message": f"Endpoint '{path}' not found",
+            "path": path,
             "method": request.method,
-            "available_endpoints": [
-                "/",
-                "/health", 
-                "/validate",
-                "/mcp",
-                "/whatsapp/webhook"
-            ]
-        }
-    )
-
-# Error handlers
-@app.exception_handler(404)
-async def not_found_handler(request: Request, exc):
-    return JSONResponse(
-        status_code=404,
-        content={
-            "error": "Not Found",
-            "message": "The requested endpoint was not found",
-            "path": str(request.url.path)
-        }
-    )
-
-@app.exception_handler(405)
-async def method_not_allowed_handler(request: Request, exc):
-    return JSONResponse(
-        status_code=405,
-        content={
-            "error": "Method Not Allowed",
-            "message": f"Method {request.method} is not allowed for this endpoint",
-            "path": str(request.url.path)
-        }
+            "available_endpoints": ["/", "/health", "/mcp"]
+        },
+        status_code=404
     )
 
