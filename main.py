@@ -10,7 +10,7 @@ import re
 import whatsapp  # Your command parsing module
 import notion    # Your Notion API wrapper module
 import reminders # Your background reminders starter
-VALID_BEARER_TOKEN = os.getenv("BEARER_TOKEN")  # Set this in your .env
+BEARER_TOKEN = os.getenv("BEARER_TOKEN")  # Set this in your .env
 USER_PHONE_NUMBER = os.getenv("USER_PHONE_NUMBER")  # Set your user phone number here
 
 app = FastAPI()
