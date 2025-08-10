@@ -9,25 +9,8 @@ import re
 import whatsapp  # Your command parsing module
 import notion    # Your Notion API wrapper module
 import reminders # Your background reminders starter
-from pydantic import BaseModel
-from fastapi import HTTPException
-
 
 app = FastAPI()
-
-class ValidateRequest(BaseModel):
-    bearer_token: str
-
-class ValidateResponse(BaseModel):
-    phone_number: str
-
-@app.post("/mcp", response_model=ValidateResponse)
-async def mcp_validate(req: ValidateRequest):
-    # Replace 'abc123token' with your actual token you want to use
-    if req.bearer_token != "abc123token":
-        raise HTTPException(status_code=401, detail="Invalid token")
-    # Return the phone number in the format {country_code}{number} without any '+' or '-' 
-    return ValidateResponse(phone_number="919602712127")
 
 @app.on_event("startup")
 async def startup_event():
