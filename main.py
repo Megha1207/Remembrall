@@ -4,51 +4,135 @@ load_dotenv()
 
 from fastapi import FastAPI, Request, Header, HTTPException
 from fastapi.responses import PlainTextResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+import logging
 
 from twilio.twiml.messaging_response import MessagingResponse
 import re
 import whatsapp  # Your command parsing module
 import notion    # Your Notion API wrapper module
 import reminders # Your background reminders starter
+
+# Environment variables
 BEARER_TOKEN = os.getenv("BEARER_TOKEN")  # Set this in your .env
 USER_PHONE_NUMBER = os.getenv("USER_PHONE_NUMBER")  # Set your user phone number here
 
-app = FastAPI()
+# Logging setup
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+app = FastAPI(
+    title="Notion WhatsApp Bot",
+    description="A WhatsApp bot for managing Notion tasks",
+    version="1.0.0"
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Request logging middleware
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    logger.info(f"Method: {request.method}, URL: {request.url}, Headers: {dict(request.headers)}")
+    response = await call_next(request)
+    logger.info(f"Response Status: {response.status_code}")
+    return response
 
 @app.on_event("startup")
 async def startup_event():
+    logger.info("Starting up the application...")
     reminders.start_reminder_thread()
+    logger.info("Reminder thread started successfully")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("Shutting down the application...")
+
+# Root endpoint
+@app.get("/")
+async def root():
+    return {
+        "message": "Notion WhatsApp Bot is running",
+        "status": "healthy",
+        "endpoints": {
+            "health": "/health",
+            "validate": "/validate (GET)",
+            "mcp": "/mcp (GET for info, POST for commands)",
+            "whatsapp_webhook": "/whatsapp/webhook (POST only)"
+        }
+    }
+
+# Health check endpoint
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "healthy",
+        "message": "Service is running properly"
+    }
+
+# MCP endpoints - Fixed to handle both GET and POST properly
 @app.get("/mcp")
 async def mcp_get():
-    return {"message": "MCP endpoint accepts POST requests only. Please POST your MCP commands here."}
+    return {
+        "message": "MCP endpoint for Puch AI integration",
+        "methods": {
+            "GET": "Returns this information",
+            "POST": "Handles MCP commands (requires Authorization header)"
+        },
+        "usage": {
+            "auth_header": "Authorization: Bearer <token>",
+            "example_payload": {"method": "validate"}
+        }
+    }
 
-# --- MCP Endpoint for Puch AI ---
-# --- MCP Endpoint for Puch AI ---
 @app.post("/mcp")
 async def mcp_handler(request: Request, authorization: str = Header(None)):
-    data = await request.json()
-    method = data.get("method")
+    try:
+        # Get request data
+        data = await request.json()
+        method = data.get("method")
+        
+        logger.info(f"MCP request received - Method: {method}")
 
-    # Allow 'validate' without token check
-    if method != "validate":
-        if authorization != f"Bearer {BEARER_TOKEN}":
-           raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+        # Handle validate method without token check
+        if method == "validate":
+            if not USER_PHONE_NUMBER:
+                raise HTTPException(status_code=500, detail="USER_PHONE_NUMBER not configured")
+            logger.info(f"Validation request - returning phone number: {USER_PHONE_NUMBER}")
+            return PlainTextResponse(USER_PHONE_NUMBER)
 
+        # For other methods, check authorization
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
         token = authorization.split(" ")[1]
         if token != BEARER_TOKEN:
             raise HTTPException(status_code=403, detail="Invalid token")
 
-    if method == "validate":
-        # Return in {country_code}{number} format — e.g., "+919876543210"
-        return PlainTextResponse(USER_PHONE_NUMBER)
+        # Handle other MCP methods here
+        if method == "status":
+            return {"status": "active", "service": "notion-whatsapp-bot"}
+        
+        # Add more MCP methods as needed
+        logger.warning(f"Unknown MCP method: {method}")
+        raise HTTPException(status_code=400, detail=f"Unknown method '{method}'")
 
-    raise HTTPException(status_code=400, detail=f"Unknown method '{method}'")
+    except Exception as e:
+        logger.error(f"Error in MCP handler: {str(e)}")
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=500, detail="Internal server error")
 
-# --- Your existing /validate endpoint (can keep or remove if you prefer) ---
+# Validate endpoint (legacy support)
 @app.get("/validate")
 async def validate(authorization: str = Header(None)):
-    if authorization is None or not authorization.startswith("Bearer "):
+    if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
     token = authorization.split(" ")[1]
@@ -57,9 +141,9 @@ async def validate(authorization: str = Header(None)):
     else:
         raise HTTPException(status_code=403, detail="Invalid token")
 
-
+# Helper functions for parsing commands
 def parse_add_args(args: str):
-    # Split by / but allow spaces around /
+    """Parse arguments for the add command"""
     parts = [part.strip() for part in re.split(r'\s*/\s*', args)]
     task_text = parts[0]
     reminder = None
@@ -86,6 +170,7 @@ def parse_add_args(args: str):
     return task_text, reminder, priority, recurrence, tags, notes
 
 def parse_edit_args(args: str):
+    """Parse arguments for the edit command"""
     parts = [part.strip() for part in re.split(r'\s*/\s*', args)]
     old_task_name = parts[0]
     updates = {
@@ -117,25 +202,29 @@ def parse_edit_args(args: str):
 
     return old_task_name, updates
 
-@app.get("/")
-async def root():
-    return {"message": "Notion WhatsApp Bot is running."}
-
-@app.api_route("/whatsapp/webhook", methods=["POST"], response_class=PlainTextResponse)
+# WhatsApp webhook - Fixed to handle errors better
+@app.post("/whatsapp/webhook", response_class=PlainTextResponse)
 async def whatsapp_webhook(request: Request):
     try:
+        # Get form data from Twilio
         form = await request.form()
         incoming_msg = form.get('Body', '').strip()
         from_number = form.get('From', '').strip()
+        
+        logger.info(f"WhatsApp message received from {from_number}: {incoming_msg}")
 
+        # Parse the command
         command, args = whatsapp.parse_command(incoming_msg)
         response_text = ""
 
+        # Handle commands
         if command == "add":
             if not args:
-                response_text = ("Please specify a task to add. Example:\n"
-                                 "add Buy groceries /reminder 2025-08-10T15:00:00 /priority High /repeat Daily "
-                                 "/tags shopping,urgent /notes Buy low fat milk")
+                response_text = (
+                    "Please specify a task to add. Example:\n"
+                    "add Buy groceries /reminder 2025-08-10T15:00:00 /priority High /repeat Daily "
+                    "/tags shopping,urgent /notes Buy low fat milk"
+                )
             else:
                 task_text, reminder, priority, recurrence, tags, notes = parse_add_args(args)
                 success = notion.add_task(
@@ -149,55 +238,55 @@ async def whatsapp_webhook(request: Request):
                 )
                 if success:
                     if reminder:
-                        response_text = f"Task added with reminder set at {reminder}!"
+                        response_text = f"✅ Task added with reminder set at {reminder}!"
                     else:
-                        response_text = "Task added to Notion!"
+                        response_text = "✅ Task added to Notion!"
                 else:
-                    response_text = "Failed to add task."
+                    response_text = "❌ Failed to add task. Please try again."
 
         elif command == "list":
             sort_flag = "sort" in args.lower()
             tasks = notion.list_tasks(user_phone=from_number, sort_by_reminder=sort_flag)
             if tasks:
-                response_text = "Your tasks:\n" + "\n".join(
-                    f"- [{'x' if t['done'] else ' '}] {t['name']}" +
-                    (f" (reminder: {t['reminder']})" if t.get('reminder') else "") +
-                    (f" [Priority: {t['priority']}]" if t.get('priority') else "") +
-                    (f" [Repeat: {t['recurrence']}]" if t.get('recurrence') else "")
+                response_text = "📋 Your tasks:\n" + "\n".join(
+                    f"{'✅' if t['done'] else '⏳'} {t['name']}" +
+                    (f" 🔔 {t['reminder']}" if t.get('reminder') else "") +
+                    (f" 🔥 {t['priority']}" if t.get('priority') else "") +
+                    (f" 🔄 {t['recurrence']}" if t.get('recurrence') else "")
                     for t in tasks
                 )
             else:
-                response_text = "No tasks found."
+                response_text = "📭 No tasks found."
 
         elif command == "list-incomplete":
             sort_flag = "sort" in args.lower()
             tasks = notion.list_tasks(user_phone=from_number, filter_done=False, sort_by_reminder=sort_flag)
             if tasks:
-                response_text = "Incomplete tasks:\n" + "\n".join(
-                    f"- {t['name']}" +
-                    (f" (reminder: {t['reminder']})" if t.get('reminder') else "") +
-                    (f" [Priority: {t['priority']}]" if t.get('priority') else "") +
-                    (f" [Repeat: {t['recurrence']}]" if t.get('recurrence') else "")
+                response_text = "⏳ Incomplete tasks:\n" + "\n".join(
+                    f"• {t['name']}" +
+                    (f" 🔔 {t['reminder']}" if t.get('reminder') else "") +
+                    (f" 🔥 {t['priority']}" if t.get('priority') else "") +
+                    (f" 🔄 {t['recurrence']}" if t.get('recurrence') else "")
                     for t in tasks
                 )
             else:
-                response_text = "No incomplete tasks found."
+                response_text = "🎉 No incomplete tasks found!"
 
         elif command == "complete":
             task_name = args.strip()
             if not task_name:
-                response_text = "Specify a task to complete. Example:\ncomplete Buy groceries"
+                response_text = "Please specify a task to complete. Example:\ncomplete Buy groceries"
             else:
                 success = notion.complete_task(task_name, user_phone=from_number)
-                response_text = "Task marked as completed!" if success else "Failed to mark task."
+                response_text = "✅ Task marked as completed!" if success else "❌ Failed to mark task as completed."
 
         elif command == "mark-incomplete":
             task_name = args.strip()
             if not task_name:
-                response_text = "Specify a task to mark incomplete. Example:\nmark-incomplete Buy groceries"
+                response_text = "Please specify a task to mark incomplete. Example:\nmark-incomplete Buy groceries"
             else:
                 success = notion.mark_incomplete_task(task_name, user_phone=from_number)
-                response_text = "Task marked as incomplete!" if success else "Failed to update task."
+                response_text = "⏳ Task marked as incomplete!" if success else "❌ Failed to update task."
 
         elif command == "edit":
             if not args.strip():
@@ -218,19 +307,19 @@ async def whatsapp_webhook(request: Request):
                     new_notes=updates["new_notes"],
                     user_phone=from_number,
                 )
-                response_text = "Task edited successfully!" if success else "Failed to edit task."
+                response_text = "✏️ Task edited successfully!" if success else "❌ Failed to edit task."
 
         elif command == "delete":
             task_name = args.strip()
             if not task_name:
-                response_text = "Specify a task to delete. Example:\ndelete Buy groceries"
+                response_text = "Please specify a task to delete. Example:\ndelete Buy groceries"
             else:
                 success = notion.delete_task(task_name, user_phone=from_number)
-                response_text = "Task deleted!" if success else "Failed to delete task."
+                response_text = "🗑️ Task deleted!" if success else "❌ Failed to delete task."
 
         elif command == "delete-all-completed":
             success = notion.delete_all_completed_tasks(user_phone=from_number)
-            response_text = "All completed tasks deleted!" if success else "Failed to delete completed tasks."
+            response_text = "🗑️ All completed tasks deleted!" if success else "❌ Failed to delete completed tasks."
 
         elif command == "search":
             keyword = args.strip()
@@ -239,9 +328,11 @@ async def whatsapp_webhook(request: Request):
             else:
                 results = notion.search_tasks(keyword, user_phone=from_number)
                 if results:
-                    response_text = "Search results:\n" + "\n".join(f"- {t['name']}" for t in results)
+                    response_text = "🔍 Search results:\n" + "\n".join(
+                        f"• {t['name']}" for t in results
+                    )
                 else:
-                    response_text = "No matching tasks found."
+                    response_text = "🔍 No matching tasks found."
 
         elif command == "summary":
             tasks = notion.list_tasks(user_phone=from_number)
@@ -252,45 +343,101 @@ async def whatsapp_webhook(request: Request):
             for t in tasks:
                 p = t.get('priority', 'None')
                 priorities[p] = priorities.get(p, 0) + 1
+            
             response_text = (
-                f"Task Summary:\n"
-                f"Total: {total}\n"
-                f"Completed: {completed}\n"
-                f"Incomplete: {incomplete}\n"
-                "By Priority:\n" + "\n".join(f"- {p}: {count}" for p, count in priorities.items())
+                f"📊 Task Summary:\n"
+                f"📋 Total: {total}\n"
+                f"✅ Completed: {completed}\n"
+                f"⏳ Incomplete: {incomplete}\n"
+                f"🔥 By Priority:\n" + 
+                "\n".join(f"  • {p}: {count}" for p, count in priorities.items())
             )
 
         elif command == "help" or not command:
             response_text = (
-                "Commands:\n"
-                "- add <task> [/reminder <ISO datetime>] [/priority <Low|Medium|High>] [/repeat|recurrence <None|Daily|Weekly|Monthly>] "
-                "[/tags <tag1,tag2>] [/notes <text>]: Add a task\n"
-                "- list [sort]: List all tasks, optionally sorted by reminder\n"
-                "- list-incomplete [sort]: List only incomplete tasks, optionally sorted\n"
-                "- complete <task>: Mark a task as completed\n"
-                "- mark-incomplete <task>: Mark a task as incomplete\n"
-                "- edit <old_task_name> /newname <new_name> /reminder <ISO datetime> /priority <Low|Medium|High> "
-                "/recurrence <None|Daily|Weekly|Monthly> /tags <tag1,tag2> /notes <text>: Edit a task\n"
-                "- delete <task>: Delete a task\n"
-                "- delete-all-completed: Delete all completed tasks\n"
-                "- search <keyword>: Search tasks by keyword\n"
-                "- summary: Show summary of your tasks\n"
-                "- help: Show this message"
+                "🤖 *Notion WhatsApp Bot Commands:*\n\n"
+                "📝 *add* <task> [options] - Add a task\n"
+                "   Options: /reminder <datetime> /priority <Low|Medium|High> /repeat <Daily|Weekly|Monthly> /tags <tag1,tag2> /notes <text>\n\n"
+                "📋 *list* [sort] - List all tasks\n"
+                "⏳ *list-incomplete* [sort] - List incomplete tasks\n"
+                "✅ *complete* <task> - Mark task as completed\n"
+                "⏳ *mark-incomplete* <task> - Mark task as incomplete\n"
+                "✏️ *edit* <task> [options] - Edit a task\n"
+                "🗑️ *delete* <task> - Delete a task\n"
+                "🗑️ *delete-all-completed* - Delete all completed tasks\n"
+                "🔍 *search* <keyword> - Search tasks\n"
+                "📊 *summary* - Show task summary\n"
+                "❓ *help* - Show this message\n\n"
+                "💡 *Example:* add Buy milk /reminder 2025-08-10T15:00:00 /priority High /tags shopping"
             )
 
         else:
-            response_text = "Unknown command. Send 'help' for the list of commands."
+            response_text = "❓ Unknown command. Send 'help' for the list of commands."
 
+        logger.info(f"Sending response: {response_text[:100]}...")
+
+        # Create Twilio response
         twilio_resp = MessagingResponse()
         twilio_resp.message(response_text)
         return PlainTextResponse(content=str(twilio_resp), media_type="application/xml")
 
     except Exception as e:
-        print(f"Exception in webhook: {e}")
+        logger.error(f"Exception in WhatsApp webhook: {str(e)}", exc_info=True)
         twilio_resp = MessagingResponse()
-        twilio_resp.message("Sorry, something went wrong. Please try again.")
+        twilio_resp.message("😵 Sorry, something went wrong. Please try again or contact support.")
         return PlainTextResponse(content=str(twilio_resp), media_type="application/xml")
 
+# WhatsApp webhook GET endpoint - Returns proper error
 @app.get("/whatsapp/webhook")
 async def whatsapp_webhook_get():
-    return PlainTextResponse("Please use POST method for this endpoint.", status_code=405)
+    return JSONResponse(
+        status_code=405,
+        content={
+            "error": "Method Not Allowed",
+            "message": "This endpoint only accepts POST requests from Twilio WhatsApp webhook",
+            "allowed_methods": ["POST"]
+        }
+    )
+
+# Catch-all for undefined routes
+@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+async def catch_all(path: str, request: Request):
+    return JSONResponse(
+        status_code=404,
+        content={
+            "error": "Not Found",
+            "message": f"Endpoint '{path}' not found",
+            "method": request.method,
+            "available_endpoints": [
+                "/",
+                "/health", 
+                "/validate",
+                "/mcp",
+                "/whatsapp/webhook"
+            ]
+        }
+    )
+
+# Error handlers
+@app.exception_handler(404)
+async def not_found_handler(request: Request, exc):
+    return JSONResponse(
+        status_code=404,
+        content={
+            "error": "Not Found",
+            "message": "The requested endpoint was not found",
+            "path": str(request.url.path)
+        }
+    )
+
+@app.exception_handler(405)
+async def method_not_allowed_handler(request: Request, exc):
+    return JSONResponse(
+        status_code=405,
+        content={
+            "error": "Method Not Allowed",
+            "message": f"Method {request.method} is not allowed for this endpoint",
+            "path": str(request.url.path)
+        }
+    )
+
