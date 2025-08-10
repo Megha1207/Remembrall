@@ -3,7 +3,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, Request, Header, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, JSONResponse
+
 from twilio.twiml.messaging_response import MessagingResponse
 import re
 import whatsapp  # Your command parsing module
@@ -13,28 +14,53 @@ VALID_BEARER_TOKEN = os.getenv("BEARER_TOKEN")  # Set this in your .env
 USER_PHONE_NUMBER = os.getenv("USER_PHONE_NUMBER")  # Set your user phone number here
 
 app = FastAPI()
-
 @app.on_event("startup")
 async def startup_event():
     reminders.start_reminder_thread()
 
-# --- Your existing routes here (whatsapp webhook etc.) ---
+# --- MCP Endpoint for Puch AI ---
+@app.post("/mcp")
+async def mcp_handler(request: Request):
+    """
+    MCP endpoint for Puch AI connection.
+    Expects JSON body with keys:
+    - command: e.g. "validate"
+    - token: bearer token string
+    """
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
 
+    command = data.get("command")
+    token = data.get("token")
+
+    if not command or not token:
+        raise HTTPException(status_code=400, detail="Missing command or token")
+
+    if command == "validate":
+        if token == VALID_BEARER_TOKEN:
+            # Return phone number as plain text (required by Puch AI)
+            return PlainTextResponse(USER_PHONE_NUMBER)
+        else:
+            raise HTTPException(status_code=403, detail="Invalid token")
+
+    # You can handle other MCP commands here if needed
+    return JSONResponse({"detail": f"Unknown command '{command}'"}, status_code=400)
+
+
+# --- Your existing /validate endpoint (can keep or remove if you prefer) ---
 @app.get("/validate")
 async def validate(authorization: str = Header(None)):
-    """
-    Validate bearer token and return user phone number in plain text.
-    This is used by Puch AI to authenticate your MCP server.
-    """
     if authorization is None or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
     token = authorization.split(" ")[1]
     if token == VALID_BEARER_TOKEN:
-        # Return phone number as plain text (no JSON)
         return PlainTextResponse(USER_PHONE_NUMBER)
     else:
         raise HTTPException(status_code=403, detail="Invalid token")
+
 
 def parse_add_args(args: str):
     # Split by / but allow spaces around /
