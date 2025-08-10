@@ -33,7 +33,7 @@ async def mcp_handler(request: Request, authorization: str = Header(None)):
     data = await request.json()
     method = data.get("method")
 
-    if token != VALID_BEARER_TOKEN:
+    if token != BEARER_TOKEN:
         raise HTTPException(status_code=403, detail="Invalid token")
 
     if method == "validate":
@@ -47,7 +47,7 @@ async def validate(authorization: str = Header(None)):
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
     token = authorization.split(" ")[1]
-    if token == VALID_BEARER_TOKEN:
+    if token == BEARER_TOKEN:
         return PlainTextResponse(USER_PHONE_NUMBER)
     else:
         raise HTTPException(status_code=403, detail="Invalid token")
