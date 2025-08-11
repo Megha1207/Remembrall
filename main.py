@@ -1,49 +1,88 @@
-#!/usr/bin/env python3
-
 import os
 import re
 import asyncio
+import logging
+import functools
 from contextlib import asynccontextmanager
+from typing import Annotated, Any, Callable, TypeVar, cast
 from dotenv import load_dotenv
-from typing import Annotated
 
-from fastapi import FastAPI, Request, Depends, HTTPException, status
+load_dotenv()
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-
 from fastmcp import FastMCP
+from fastmcp.server.auth.providers.bearer import BearerAuthProvider, RSAKeyPair
 from mcp import ErrorData, McpError
+from mcp.server.auth.provider import AccessToken
 from mcp.types import TextContent, INTERNAL_ERROR
-from pydantic import Field
+from pydantic import Field, BaseModel
 from twilio.twiml.messaging_response import MessagingResponse
-load_dotenv()
-import whatsapp   # your existing command parsing module
-import notion     # your Notion API wrapper module
-import reminders  # your reminders starter module
 
-# ======================
-# ENVIRONMENT VARIABLES
-# ======================
-load_dotenv()
-AUTH_TOKEN = os.environ.get("AUTH_TOKEN", "m12egha12")
-VALIDATE_PHONE_NUMBER = os.environ.get("VALIDATE_PHONE_NUMBER", "919602712127")
+# Your existing modules
+import whatsapp  # command parsing
+import notion    # Notion API wrapper
+import reminders # reminder scheduler
 
-# ======================
-# MCP SERVER
-# ======================
-mcp = FastMCP("Notion WhatsApp Bot MCP Server")
+# --- Logging Configuration ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger('notion_whatsapp_bot')
 
-@mcp.tool(description="Validate bearer token and return user phone number.")
-async def validate(token: Annotated[str, Field(description="Bearer token to validate")] = "") -> str:
-    if token == AUTH_TOKEN:
-        return VALIDATE_PHONE_NUMBER
-    else:
-        raise McpError(ErrorData(code=INTERNAL_ERROR, message="Invalid token"))
+F = TypeVar('F', bound=Callable[..., Any])
 
-# ======================
-# COMMAND ARG PARSERS
-# ======================
+def log_errors(func: F) -> F:
+    """Decorator to log errors and return user-friendly messages."""
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        try:
+            logger.info(f"Calling {func.__name__} with kwargs={kwargs}")
+            result = await func(*args, **kwargs)
+            logger.info(f"{func.__name__} completed successfully")
+            return result
+        except McpError as e:
+            logger.error(f"McpError in {func.__name__}: {str(e)}", exc_info=True)
+            raise e
+        except Exception as e:
+            logger.error(f"Unexpected error in {func.__name__}: {str(e)}", exc_info=True)
+            raise McpError(ErrorData(code=INTERNAL_ERROR, message="An unexpected error occurred."))
+    return cast(F, wrapper)
+
+# --- Load environment variables ---
+AUTH_TOKEN = os.environ.get("AUTH_TOKEN")
+VALIDATE_PHONE_NUMBER = os.environ.get("VALIDATE_PHONE_NUMBER")
+
+assert AUTH_TOKEN, "Please set AUTH_TOKEN in your .env file"
+assert VALIDATE_PHONE_NUMBER, "Please set VALIDATE_PHONE_NUMBER in your .env file"
+
+# --- Auth Provider ---
+class NotionBotAuthProvider(BearerAuthProvider):
+    def __init__(self, token: str):
+        k = RSAKeyPair.generate()
+        super().__init__(public_key=k.public_key, jwks_uri=None, issuer=None, audience=None)
+        self.token = token
+
+    async def load_access_token(self, token: str) -> AccessToken | None:
+        if token == self.token:
+            return AccessToken(
+                token=token,
+                client_id="notion-bot-client",
+                scopes=["*"],
+                expires_at=None,
+            )
+        return None
+
+# --- MCP Server Setup ---
+mcp = FastMCP(
+    "Notion WhatsApp Bot MCP Server",
+    auth=NotionBotAuthProvider(AUTH_TOKEN)
+)
+
+# --- Command Arg Parsers ---
 def parse_add_args(args: str):
     parts = [part.strip() for part in re.split(r'\s*/\s*', args)]
     task_text = parts[0]
@@ -97,11 +136,8 @@ def parse_edit_args(args: str):
             updates["new_notes"] = part[6:].strip()
     return old_task_name, updates
 
-# ======================
-# COMMAND PROCESSOR
-# ======================
+# --- Command Processor ---
 def process_whatsapp_command(body: str, from_number: str) -> str:
-    """Process WhatsApp commands and return plain text responses."""
     command_line = body.strip()
     if not command_line:
         return "Unknown command. Send 'help' for the list of commands."
@@ -216,8 +252,22 @@ def process_whatsapp_command(body: str, from_number: str) -> str:
 
     return "Unknown command. Send 'help' for the list of commands."
 
-# MCP wrapper
+# --- MCP Tools ---
+class ValidateRequest(BaseModel):
+    token: str
+
+@mcp.tool(description="Validate bearer token and return user phone number.")
+@log_errors
+async def validate(body: ValidateRequest) -> str:
+    if body.token == AUTH_TOKEN:
+        logger.info(f"Token validated successfully. Returning phone number: {VALIDATE_PHONE_NUMBER}")
+        return VALIDATE_PHONE_NUMBER
+    else:
+        logger.warning("Invalid token provided during validation.")
+        raise McpError(ErrorData(code=INTERNAL_ERROR, message="Invalid token"))
+
 @mcp.tool(description="Process WhatsApp command input and return response text.")
+@log_errors
 async def whatsapp_process_command(
     body: Annotated[str, Field(description="Raw WhatsApp message body text")],
     from_number: Annotated[str, Field(description="Sender phone number")]
@@ -228,24 +278,15 @@ async def whatsapp_process_command(
     except Exception as e:
         raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Processing failed: {str(e)}"))
 
-# ======================
-# FASTAPI APP
-# ======================
-security = HTTPBearer()
-async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    if credentials.credentials != AUTH_TOKEN:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication token")
-    return credentials.credentials
-
+# --- FASTAPI APP ---
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
-    print("🚀 Starting reminder thread...")
+    logger.info("🚀 Starting reminder thread...")
     reminders.start_reminder_thread()
     yield
-    print("🛑 Shutting down...")
+    logger.info("🛑 Shutting down...")
 
 app = FastAPI(title="Notion WhatsApp Bot Server", lifespan=lifespan)
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -254,7 +295,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Routes
 @app.get("/")
 async def root():
     return {"message": "Notion WhatsApp Bot Server is running."}
@@ -263,27 +303,6 @@ async def root():
 async def mcp_health():
     return {"status": "MCP server is running", "tools": ["validate", "whatsapp_process_command"]}
 
-# Manual test routes
-@app.post("/mcp/validate")
-async def validate_token(request: Request, token: str = None):
-    # Try query/form param first
-    if token:
-        provided_token = token
-    else:
-        # Fallback to JSON body
-        body = await request.json()
-        provided_token = body.get("token", "")
-
-    if provided_token == AUTH_TOKEN:
-        return {"phone_number": VALIDATE_PHONE_NUMBER}
-    else:
-        return {"error": "Invalid token"}
-
-@app.post("/mcp/process", dependencies=[Depends(verify_token)])
-async def manual_process(body: str, from_number: str):
-    return {"response": process_whatsapp_command(body, from_number)}
-
-# WhatsApp webhook
 @app.post("/whatsapp/webhook", response_class=PlainTextResponse)
 async def whatsapp_webhook(request: Request):
     twilio_resp = MessagingResponse()
@@ -300,7 +319,7 @@ async def whatsapp_webhook(request: Request):
         twilio_resp.message(process_whatsapp_command(incoming_msg, from_number))
         return PlainTextResponse(content=str(twilio_resp), media_type="application/xml")
     except Exception as e:
-        print(f"❌ Webhook error: {e}")
+        logger.error(f"❌ Webhook error: {e}", exc_info=True)
         twilio_resp.message("Sorry, something went wrong. Please try again.")
         return PlainTextResponse(content=str(twilio_resp), media_type="application/xml")
 
@@ -311,10 +330,24 @@ async def whatsapp_webhook_get():
 # Mount MCP only once
 app.mount("/mcp", mcp.http_app())
 
-if __name__ == "__main__":
-    import uvicorn
-    print("🚀 Starting Notion WhatsApp Bot Server...")
-    print(f"📱 Auth token: {AUTH_TOKEN}")
-    print("🌐 Server running at: http://localhost:8086")
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8086)))
+# --- Run Server ---
+async def main():
+    logger.info("🚀 Starting Notion WhatsApp Bot Server...")
+    logger.info(f"📱 Auth token: {AUTH_TOKEN}")
+    logger.info(f"🌐 Server running at: http://localhost:8086")
+    try:
+        await mcp.run_async("streamable-http", host="0.0.0.0", port=int(os.environ.get("PORT", 8086)))
+    except Exception as e:
+        logger.critical(f"Failed to start server: {str(e)}", exc_info=True)
+        raise
+    finally:
+        logger.info("Server shutdown complete")
 
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Server stopped by user")
+    except Exception as e:
+        logger.critical(f"Fatal error: {str(e)}", exc_info=True)
+        raise
