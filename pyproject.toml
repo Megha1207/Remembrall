@@ -6,15 +6,21 @@ authors = [
     { name = "Megha", email = "megha1207singh@gmail.com" }
 ]
 license = { text = "MIT" }
+requires-python = ">=3.8"
 dependencies = [
     "fastapi",
-    "uvicorn",
+    "uvicorn[standard]",
     "requests",
     "python-dotenv",
     "twilio",
     "python-multipart",
-    "notion",
+    "notion-client",  # Use notion-client instead of notion
     "pytz",
     "fastmcp",
     "mcp",
+    "pydantic",
 ]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
