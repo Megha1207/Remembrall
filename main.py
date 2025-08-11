@@ -5,15 +5,20 @@ import logging
 import functools
 from contextlib import asynccontextmanager
 from typing import Annotated, Any, Callable, TypeVar, cast
-from dotenv import load_dotenv
 
-load_dotenv()
+# Only load .env in development (when file exists)
+if os.path.exists('.env'):
+    from dotenv import load_dotenv
+    load_dotenv()
+    print("Loaded .env file for development")
+else:
+    print("No .env file found - using environment variables")
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from fastmcp import FastMCP
-from fastmcp.server.auth.providers.bearer import BearerAuthProvider, RSAKeyPair
+from fastmcp.server.auth.providers.jwt import JWTVerifier  # Updated import
 from mcp import ErrorData, McpError
 from mcp.server.auth.provider import AccessToken
 from mcp.types import TextContent, INTERNAL_ERROR
@@ -24,6 +29,9 @@ from twilio.twiml.messaging_response import MessagingResponse
 import whatsapp  # command parsing
 import notion    # Notion API wrapper
 import reminders # reminder scheduler
+
+my_var = os.getenv("MY_VARIABLE")
+print("MY_VARIABLE:", my_var) 
 
 # --- Logging Configuration ---
 logging.basicConfig(
@@ -52,35 +60,37 @@ def log_errors(func: F) -> F:
             raise McpError(ErrorData(code=INTERNAL_ERROR, message="An unexpected error occurred."))
     return cast(F, wrapper)
 
-# --- Load environment variables ---
+# --- Load environment variables with better error messages ---
 AUTH_TOKEN = os.environ.get("AUTH_TOKEN")
 VALIDATE_PHONE_NUMBER = os.environ.get("VALIDATE_PHONE_NUMBER")
 
-assert AUTH_TOKEN, "Please set AUTH_TOKEN in your .env file"
-assert VALIDATE_PHONE_NUMBER, "Please set VALIDATE_PHONE_NUMBER in your .env file"
+# Debug: Print all environment variables that start with relevant prefixes
+print("Environment variables check:")
+for key, value in os.environ.items():
+    if key.startswith(('AUTH_', 'VALIDATE_', 'MY_')):
+        print(f"{key}: {'SET' if value else 'NOT SET'}")
 
-# --- Auth Provider ---
-class NotionBotAuthProvider(BearerAuthProvider):
+if not AUTH_TOKEN:
+    print("❌ AUTH_TOKEN not found in environment variables")
+    print("Available environment variables:", list(os.environ.keys()))
+    raise ValueError("AUTH_TOKEN environment variable is required but not set")
+
+if not VALIDATE_PHONE_NUMBER:
+    print("❌ VALIDATE_PHONE_NUMBER not found in environment variables")
+    raise ValueError("VALIDATE_PHONE_NUMBER environment variable is required but not set")
+
+print("✅ All required environment variables are set")
+
+# --- Updated Auth Provider (using new JWT approach) ---
+class NotionBotAuthProvider:
     def __init__(self, token: str):
-        k = RSAKeyPair.generate()
-        super().__init__(public_key=k.public_key, jwks_uri=None, issuer=None, audience=None)
         self.token = token
 
-    async def load_access_token(self, token: str) -> AccessToken | None:
-        if token == self.token:
-            return AccessToken(
-                token=token,
-                client_id="notion-bot-client",
-                scopes=["*"],
-                expires_at=None,
-            )
-        return None
+    async def authenticate(self, token: str) -> bool:
+        return token == self.token
 
 # --- MCP Server Setup ---
-mcp = FastMCP(
-    "Notion WhatsApp Bot MCP Server",
-    auth=NotionBotAuthProvider(AUTH_TOKEN)
-)
+mcp = FastMCP("Notion WhatsApp Bot MCP Server")
 
 # --- Command Arg Parsers ---
 def parse_add_args(args: str):
