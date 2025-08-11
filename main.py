@@ -62,12 +62,12 @@ def log_errors(func: F) -> F:
 
 # --- Load environment variables with better error messages ---
 AUTH_TOKEN = os.environ.get("AUTH_TOKEN")
-VALIDATE_PHONE_NUMBER = os.environ.get("VALIDATE_PHONE_NUMBER")
+MY_NUMBER = os.environ.get("MY_NUMBER")  # changed from VALIDATE_PHONE_NUMBER
 
 # Debug: Print all environment variables that start with relevant prefixes
 print("Environment variables check:")
 for key, value in os.environ.items():
-    if key.startswith(('AUTH_', 'VALIDATE_', 'MY_')):
+    if key.startswith(('AUTH_', 'MY_', 'VALIDATE_')):
         print(f"{key}: {'SET' if value else 'NOT SET'}")
 
 if not AUTH_TOKEN:
@@ -75,9 +75,9 @@ if not AUTH_TOKEN:
     print("Available environment variables:", list(os.environ.keys()))
     raise ValueError("AUTH_TOKEN environment variable is required but not set")
 
-if not VALIDATE_PHONE_NUMBER:
-    print("❌ VALIDATE_PHONE_NUMBER not found in environment variables")
-    raise ValueError("VALIDATE_PHONE_NUMBER environment variable is required but not set")
+if not MY_NUMBER:
+    print("❌ MY_NUMBER not found in environment variables")
+    raise ValueError("MY_NUMBER environment variable is required but not set")
 
 print("✅ All required environment variables are set")
 
@@ -263,15 +263,21 @@ def process_whatsapp_command(body: str, from_number: str) -> str:
     return "Unknown command. Send 'help' for the list of commands."
 
 # --- MCP Tools ---
+# New Puch-required validate tool
+@mcp.tool
+async def validate() -> str:
+    """Simple validate tool required by Puch that returns MY_NUMBER."""
+    return MY_NUMBER
+
 class ValidateRequest(BaseModel):
     token: str
 
 @mcp.tool(description="Validate bearer token and return user phone number.")
 @log_errors
-async def validate(body: ValidateRequest) -> str:
+async def validate_with_token(body: ValidateRequest) -> str:
     if body.token == AUTH_TOKEN:
-        logger.info(f"Token validated successfully. Returning phone number: {VALIDATE_PHONE_NUMBER}")
-        return VALIDATE_PHONE_NUMBER
+        logger.info(f"Token validated successfully. Returning phone number: {MY_NUMBER}")
+        return MY_NUMBER
     else:
         logger.warning("Invalid token provided during validation.")
         raise McpError(ErrorData(code=INTERNAL_ERROR, message="Invalid token"))
@@ -311,7 +317,7 @@ async def root():
 
 @app.get("/mcp/health")
 async def mcp_health():
-    return {"status": "MCP server is running", "tools": ["validate", "whatsapp_process_command"]}
+    return {"status": "MCP server is running", "tools": ["validate", "validate_with_token", "whatsapp_process_command"]}
 
 @app.post("/whatsapp/webhook", response_class=PlainTextResponse)
 async def whatsapp_webhook(request: Request):
