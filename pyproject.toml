@@ -1,0 +1,20 @@
+[project]
+name = "notion-whatsapp-bot"
+version = "0.1.0"
+description = "A Notion WhatsApp bot built with FastAPI."
+authors = [
+    { name = "Megha", email = "megha1207singh@gmail.com" }
+]
+license = { text = "MIT" }
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "requests",
+    "python-dotenv",
+    "twilio",
+    "python-multipart",
+    "notion",
+    "pytz",
+    "fastmcp",
+    "mcp",
+]
